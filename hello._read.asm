@@ -1,12 +1,11 @@
-; Minimal example of using ca65 to build SNES ROM.
+; 使用 ca65 构建 SFC 程序ROM 的最小示例
 
-.p816   ; 65816 processor
-.i16    ; X/Y are 16 bits
-.a8     ; A is 8 bits
+.p816   ; 指示编译器是 65816(即 SFC 硬件使用的) 处理器
+.i16    ; X/Y 寄存器设置为 16 位
+.a8     ; A 寄存器设置为 8 位
 
-.include "snes.inc"
-.include "charmap.inc"
-.include "ucs2char.asm"
+.include "snes.inc"        ; 引入地址常量表
+.include "charmap.inc"     ; 引入ASCII-128字符映射表
 
 .segment "HEADER"    ; +$7FE0 in file
 .byte "CA65 EXAMPLE" ; ROM name
@@ -172,7 +171,8 @@ ClearVRAM:
    pla
    RTS
 
-.include "charset.asm"
+.include "charset.asm"     ; 引入ASCII-128字符集
+.include "ucs2char.asm"    ; 引入UCS-2字符集
 
 .segment "VECTORS"
 .word 0, 0        ;Native mode vectors

@@ -1,4 +1,4 @@
-rm ./*.list 
-rm ./*.mmap 
-rm ./*.o 
-rm ./*.smc
+rm -f ./*.list 
+rm -f ./*.mmap 
+rm -f ./*.o 
+rm -f ./*.smc
