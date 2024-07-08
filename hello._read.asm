@@ -7,41 +7,57 @@
 .include "snes.inc"        ; 引入地址常量表
 .include "charmap.inc"     ; 引入ASCII-128字符映射表
 
-.segment "HEADER"    ; +$7FE0 in file
-.byte "CA65 EXAMPLE" ; ROM name
+.segment "HEADER"    ; 设置头信息段
+.byte "CA65 EXAMPLE" ; ROM 名称
 
-.segment "ROMINFO"   ; +$7FD5 in file
-.byte $30            ; LoROM, fast-capable
-.byte 0              ; no battery RAM
-.byte $07            ; 128K ROM
-.byte 0,0,0,0
-.word $AAAA,$5555    ; dummy checksum and complement
+.segment "ROMINFO"   ; 设置ROM信息段
+.byte $30            ; ROM映射模式：LoROM, 支持快速访问
+.byte 0              ; 不使用电池供电的RAM（即无游戏存档功能）
+.byte $07            ; ROM 大小：128K
+.byte 0,0,0,0        ; 保留字段
+.word $AAAA,$5555    ; 虚拟的检验和其补码，在实际发布前，需要使用工具计算更新
 
-.segment "CODE"
-   jmp start
+.segment "CODE"      ; 从这里开始基本上全是代码段内容
+   jmp start         ; 跳转到 start 标签处，即程序入口，用于兼容某些开发工具或模拟器，同时也符合 6502 时代早期的汇编风格
 
-VRAM_CHARSET   = $0000 ; must be at $1000 boundary
-VRAM_BG1       = $1000 ; must be at $0400 boundary
-VRAM_BG2       = $1400 ; must be at $0400 boundary
-VRAM_BG3       = $1800 ; must be at $0400 boundary
-VRAM_BG4       = $1C00 ; must be at $0400 boundary
+; 定义一些常量
+VRAM_CHARSET   = $0000 ; 地址必须 $1000 (4K)边界对齐
+VRAM_BG1       = $1000 ; 地址必须 $0400 (1K)边界对齐
+VRAM_BG2       = $1400 ; 地址必须 $0400 (1K)边界对齐
+VRAM_BG3       = $1800 ; 地址必须 $0400 (1K)边界对齐
+VRAM_BG4       = $1C00 ; 地址必须 $0400 (1K)边界对齐
 START_X        = 9
 START_Y        = 14
 START_TM_ADDR  = VRAM_BG1 + 32*START_Y + START_X
 
-hello_str: .asciiz "Hello, World!"
+hello_str: .asciiz "Hello, World!"  ; 将字符串转为ASCII码序列，并添加NULL结尾(\0) 存储于此
 
+; 程序入口地址标签,全局性标签
 start:
-   clc             ; native mode
+   ; CLC(Clear Carry Flag) 清除进位标志位，即进入本地(native)模式
+   ; 65816处理器在启动时默认为模拟(Emulation)模式，需要通过此指令切换到本地模式
+   ; 模拟模式主要用于兼容旧 6502 处理器行为
+   ; clc -> xce 从模拟模式切换到本地模式， sec -> xce 从本地模式切换到模拟模式
+   clc
    xce
-   rep #$10        ; X/Y 16-bit
-   sep #$20        ; A 8-bit
+   ; rep (Reset Processor Status Bits) 重置处理器状态位
+   ; X/Y 寄存器设置为 16 位
+   rep #$10
+   ; sep (Set Processor Status Bits) 设置处理器状态位
+   ; A 寄存器设置为 8 位
+   sep #$20
 
-   ; Clear registers
+   ; 清空寄存器
+   ; ldx (Load X Register) 从内存加载数据到 X 寄存器
+   ; # 井号为立即数标识符，表示后面的数值为立即数（也就是数值字面量）
    ldx #$33
 
+   ; 跳转到 ClearVRAM 函数，函数执行后，会接着执行下面的代码
    jsr ClearVRAM
 
+; @ 为标签前缀，用于标识局部标签
+; 局部标签是可以重复定义的，因为它只在定义的附近有效
+; 局部标签只用于小范围内的代码块，比如循环体等
 @loop:
    stz INIDISP,x
    stz NMITIMEN,x
@@ -135,13 +151,15 @@ return_int:
    rti
 
 ;----------------------------------------------------------------------------
-; ClearVRAM -- Sets every byte of VRAM to zero
-; from bazz's VRAM tutorial
-; In: None
-; Out: None
-; Modifies: flags
+; ClearVRAM -- 将 VRAM 清空（即：每个字节都设置为零）
+; 代码来源： bazz 的 VRAM 教程
+; 输入: 无
+; 输出: 无
+; 修改: 标志位
 ;----------------------------------------------------------------------------
 ClearVRAM:
+   ; 保存寄存器状态，只要保存这个函数里需要用到的寄存器就可以了
+   ; 保存 A/X/P 寄存器，压入堆栈，以便后续恢复
    pha
    phx
    php
