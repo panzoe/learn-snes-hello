@@ -164,13 +164,46 @@ ClearVRAM:
    phx
    php
 
+   ; REP,SEP 都是针对 P 寄存器的指令
+   ; REP 会重置值为 1 的位对应的状态
+   ; SEP 会设置值为 1 的位对应的状态
+   ; P 寄存器的位定义如下：
+   ;|    负数   |    溢出   |    内存/累加器标志位 |    索引寄存器宽度标志位 |    十进制模式标志位 |    中断屏蔽标志位   |   零标志位 | 进位标志位 |
+   ;|     N    |     V    |           M        |           X          |         D        |          I        |     Z    |      C     |
+   ;| Negative | Overflow | Memory/Accumulator | Index register size  |   Decimal mode   | Interrupt disable |    Zero  |    Carry   |
+   ; 不是所有位组合码都有实际用途或频繁设置，比如 C,Z,V,N 通常是由算术和逻辑操作自动设置的
+   ; REP(Reset Processor Status Bits) 重置处理器状态位，针对的是 P 寄存器
+   ; $30 -> 0B00110000， 也就是重置 X/Y 寄存器为 16 位
    REP #$30		; mem/A = 8 bit, X/Y = 16 bit
+   ; SEP(SET Processor Status Bits) 设置处理器状态位
+   ; $20 -> 0B00100000， 也就是设置 A 寄存器为 8 位
    SEP #$20
 
+   ; LDA(LoaD Accumulator) 从内存加载数据到 A 寄存器
    LDA #$80
-   STA $2115         ;Set VRAM port to word access
+   ; STA(STore Accumulator) 将 A 寄存器的值存储到指定内存地址
+   ; $2100 - $21FF 主要用于 PPU(Picture Processing Unit，即图像处理单元) 寄存器
+   ; $2115(VMAIN) 用于设置 VRAM 地址增量模式（也就是访问字节模式）
+   ; 这里设置为字模式，即每次访问 VRAM 时，地址自动增加 2
+   STA $2115
+
+   ; SFC 使用 Little-Endian (小端)字节序，即低字节在前，高字节在后
+   ; $1809 -> 0B0001_1000_0000_1001
+   ; 0B0001_1000 -> $4300 高字节放于低地址
+   ; 0B0000_1001 -> $4301 低字节放于高地址
+   ; $4300 用于设置传输目标的偏移地址，DMA 的目标地址仅限于 $21xx 系列寄存器，所以这里8位地址是偏移量
+   ; $4301 是 8位状态寄存器，用于设置 DMA 传输模式：
+   ; 0-2: 未使用 | 3-4: 传输模式 | 5: 间接寻址模式 | 6: 传输方向 | 7: 未使用
+   ; 
+   ; 传输模式： 
    LDX #$1809
-   STX $4300         ;Set DMA mode to fixed source, WORD to $2118/9
+   ; $4300 是 DMA 控制器0的参数寄存器地址，用于设置 DMA 传输模式
+   ; 这是一个16位寄存器，低8位($4300)用于设置 DMA 模式，高8位($4301)用于设置传输模式等
+   ; $2118,$2119 是 VRAM 数据写入端口
+   ; $2122 是 CGRAM 数据写入端口
+   ; $2124 是 OAM 数据写入端口
+   ; DMA 主要用途：快速向 VRAM 写入数据、更新调色板，修改精灵属性
+   STX $4300
    LDX #$0000
    STX $2116         ;Set VRAM port address to $0000
    STX $0000         ;Set $00:0000 to $0000 (assumes scratchpad ram)
@@ -184,9 +217,11 @@ ClearVRAM:
 
    STZ $2119         ;clear the last byte of the VRAM
 
+   ; 按顺序将函数开头压入堆栈的寄存器状态恢复
    plp
    plx
    pla
+   ; rts (Return from Subroutine) 从子程序返回，JSR 指令会跳转前的地址压入了堆栈，此指令会将其弹出并跳转到该地址
    RTS
 
 .include "charset.asm"     ; 引入ASCII-128字符集
