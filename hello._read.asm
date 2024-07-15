@@ -21,13 +21,41 @@
    jmp start         ; 跳转到 start 标签处，即程序入口，用于兼容某些开发工具或模拟器，同时也符合 6502 时代早期的汇编风格
 
 ; 定义一些常量
-VRAM_CHARSET   = $0000 ; 地址必须 $1000 (4K)边界对齐
+; 字符集Tile在VRAM中的地址，SFC 硬件要求 图案数据(Tile/Pattern Data) 8K 对齐
+; 程序的 chatset.asm 中定义了 ASCII-128 个 1bpp 的字符图案，共占用了 128*8 = 1024 字节
+; 所以实际使用了 VRAM 从 $0000-$03FF 的 1K 空间，与下面的背景层地址不冲突
+VRAM_CHARSET   = $0000 ; 地址必须 $2000 (8K)边界对齐
+
+; SFC 支持的分辨率
+; 标准输出分辨率是 256x224(NTSC) 
+; 高分辨率输出是 256x239(PAL,但通常只使用前 224 行以保持与 NTSC 的兼容性)，通过 SETINI($2133) BIT2 启用
+; 宽屏模式输出是 512x224 通过 SETINI($2133) BIT6 启用
+; 高分辨率宽屏模式输出是 512x239 通过 SETINI($2133) BIT2 和 BIT6 启用
+; PAL 系统通常使用 256x239 或者 512x239 分辨率
+; 宽屏模式(512宽) 实际上是通过每个像素点采样两次实现的，不是真正的高分辨率
+; 分辨率设置和图形模式(0-7) 是独立的，分辨率模式不会改变 VRAM 中图形数据组织方式
+; 宽屏模式会影响 CPU 的处理负担，因为需要处理更多像素点
+
+; MODE 0-7，大多数情况下，标准背景大小都是 32x32 TileMap
+; 这意味着一个背景层通常由 1024个Tiles 组成
+; SFC 支持扩展背景大有：64x32, 32x64, 64x64，这些选项在多多数模式下可用
+; 当然不同模式下还有更复杂的背景规格，比如 MODE7
+
+; SFC 硬件要求，每个背景层的起始地址都在 1K($0400) 边界上对齐
+; 1k对齐是从 $0000 开始算的，地址可穷举为：$0000, $0400, $0800, ... ..., $F800 ,$FC00 (共 64个地址)
+; 另外，这里说的 背景层起始地址，准确的说应该是 背景地图(TileMap)的起始地址
 VRAM_BG1       = $1000 ; 地址必须 $0400 (1K)边界对齐
 VRAM_BG2       = $1400 ; 地址必须 $0400 (1K)边界对齐
 VRAM_BG3       = $1800 ; 地址必须 $0400 (1K)边界对齐
 VRAM_BG4       = $1C00 ; 地址必须 $0400 (1K)边界对齐
+
+; 定义文本在 TileMap 中的 X,Y 坐标(32x32 瓦片地图)
 START_X        = 9
 START_Y        = 14
+; TileMap 是 32x32 的二维数据，每两个字节用于表示一个 Tile 的索引信息
+; !!! 这里的计算比较迷惑，看意图应该是将 32x32 的 TileMap 转换为 1维数组，然后计算出了文本的起始地址
+; !!! 但 TileMap 中每个 Tile 的索引信息是 2 字节，所以这里的计算有问题，这里更像是
+; !!! 之后再继续分析吧？？？！！！
 START_TM_ADDR  = VRAM_BG1 + 32*START_Y + START_X
 
 hello_str: .asciiz "Hello, World!"  ; 将字符串转为ASCII码序列，并添加NULL结尾(\0) 存储于此
@@ -243,28 +271,57 @@ start:
    ; 未到达条件，继续循环
    bne @charset_loop
 
-   ; Place string tiles in background
+
+   ; 以下在背景层上构建字符串Tile
    ldx #START_TM_ADDR
+   ; 设置VRAM目标地址为要打印字符串的Tile在背景层1上TileMap的定位(X,Y)起始地址
    stx VMADDL
+   ; x = 0 for loop
    ldx #0
 @string_loop:
+   ; hello_str 就是 "hello, world!" 字符串的地址标签, 加上 x (0开始)，读取一个字节到A寄存器(ASCII字符集都是1字节大小)
    lda hello_str,x
+   ; beq (Branch if EQual(to zero)) 如果 A 寄存器的值为 0，则跳转到 @enable_display 标签处
    beq @enable_display
+   ; 这里写入的是TileMap中的Tile索引信息，16位宽，格式：
+   ; 高位      | 低位
+   ; vhopppcc  | cccccccc
+   ; v: 垂直翻转(0,不翻转) | h: 水平翻转(0,不翻转) | o: 优先级(1 高) | p: 调色板编号 | c: Tile索引
    sta VMDATAL
-   lda #$20 ; priority 1
+   ; $20 -> 0B0010_0000 -> 高优先级，使用编号0调色板
+   lda #$20
    sta VMDATAH
+   ; x++
    inx
+   ; 无条件跳转，相当于 C 语言中的 while(true) {}
    bra @string_loop
 
 @enable_display:
-   ; Show BG1
+   ; TM($212C) 是 PPU 显示层控制寄存器，用于设置显示层的显示状态
+   ; | 1 BIT: 算术窗口(Arismetic Window) | 2 BIT: 窗口2 | 3 BIT: 窗口1 | 4 BIT: 精灵(OBJ) | 5 BIT: 背景4(BG4) | 6 BIT: 背景3(BG3) | 7 BIT: 背景2(BG2) | 8 BIT: 背景1(BG1) |
+   ; 0: 隐藏 1: 显示
+   ; $01 -> 显示背景1
    lda #$01
    sta TM
-   ; Maximum screen brightness
+
+   ; INIDISP($2100) 是 PPU 控制寄存器，用于设置显示控制
+   ; F---BBBB
+   ; F: 强制消隐(Force Blanking) 0: 正常操作(仅垂直空白期可访问VRAM) 1: 强制消隐（屏幕变黑，允许安全访问 VRAME、OAM、CGRAM）
+   ; B: 屏幕亮度 (0-15级), $0=OFF, $F=MAX
+   ; 也就是将屏幕设置为最亮
    lda #$0F
    sta INIDISP
 
-   ; enable NMI for Vertical Blank
+   ; NMITIMEN($4200) 是 NMI 控制寄存器，用于设置 NMI 中断的一些参数
+   ; n-yx---a
+   ; 0: 禁用 1: 启用
+   ; n: NMI 中断使能
+   ; y: V-Blank 中断(V-Count IRQ)
+   ; x: H-Blank 中断(H-Count IRQ)
+   ; a: 自动控制器读取(Auto-Joypad-Read) -> 每个VBlank期间自动读取控制器状态
+   ; x/y : 用于精确时序，可以在特定的扫描线或水平位置触发中断
+   ;
+   ; $80 -> 0B10000000 -> 为 Vertical Blank 启用 NMI 中断
    lda #$80
    sta NMITIMEN
 
@@ -300,20 +357,35 @@ game_loop:
    jmp game_loop
 
 
+; 以下是 NMI(Non-Maskable Interrupt，不可屏蔽中断) 处理程序
+; 在 SFC 中，NMI 通常在每个垂直空间期触发
+; 这个地址被配置在了向量表，由SFC硬件自动触发
 nmi:
-   rep #$10        ; X/Y 16-bit
-   sep #$20        ; A 8-bit
+   ; 设置 X/Y 寄存器为 16 位宽度，A 寄存器为 8 位宽度
+   rep #$10
+   sep #$20
+
+   ; 保存 D(直接页寄存器)、A(累加器)、X(索引寄存器)、Y(索引寄存器) 状态(压入堆栈)
    phd
    pha
    phx
    phy
-   ; Do stuff that needs to be done during V-Blank
-   lda RDNMI ; reset NMI flag
+
+   ; 这里应该插入垂直空白期间执行的具体代码
+   
+   ; 重置 NMI 标志位
+   lda RDNMI
+
+   ; 从堆栈恢复4个寄存器状态
    ply
    plx
    pla
    pld
+
+; 地址标签：简单返回主程序
 return_int:
+   ; RTI(Return from Interrupt) 指令结束中断处理并返回到主程序
+   ; 此地址是SFC中断触发的会自动保存之前的代码执行状态，简单调用 RTI 指令即可恢复到主程序继续执行
    rti
 
 ;----------------------------------------------------------------------------
@@ -464,19 +536,24 @@ ClearVRAM:
 .include "charset.asm"     ; 引入ASCII-128字符集
 .include "ucs2char.asm"    ; 引入UCS-2字符集
 
+; 向量表，配置中断响应程序
+; 表格式为： 本地模式表 + 仿真模式表
+; 注意向量表总是配置在 卡带第0个BANK的指定位置
 .segment "VECTORS"
-.word 0, 0        ;Native mode vectors
-.word return_int  ;COP
-.word return_int  ;BRK
-.word return_int  ;ABORT
-.word nmi         ;NMI
-.word start       ;RST
-.word return_int  ;IRQ
+; 本地模式
+.word 0, 0        ; 未使用
+.word return_int  ;COP（协处理器）中断
+.word return_int  ;BRK（软件中断）
+.word return_int  ;ABORT（中止）
+.word nmi         ;NMI（不可屏蔽中断）
+.word start       ;RST（重置）
+.word return_int  ;IRQ（可屏蔽中断）
 
-.word 0, 0        ;Emulation mode vectors
-.word return_int  ;COP
-.word 0
-.word return_int  ;ABORT
-.word nmi         ;NMI
-.word start       ;RST
-.word return_int  ;IRQ
+; 仿真模式
+.word 0, 0        ; 未使用
+.word return_int  ;COP（协处理器）中断
+.word 0           ; 未使用
+.word return_int  ;ABORT（中止）
+.word nmi         ;NMI（不可屏蔽中断）
+.word start       ;RST（重置）
+.word return_int  ;IRQ（可屏蔽中断）
